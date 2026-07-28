@@ -15,7 +15,8 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 - **🧭 Interactive Mode**: Launch a guided menu when the CLI is run without arguments.
 - **⏱️ Rate Limit Tracker**: Read and analyze HTTP headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`) to help avoid rate limits in production.
 - **📋 Health Dashboard**: Benchmark latency, check synchronization, and compare performance across multiple endpoints concurrently.
-- **💾 Multiple Output Formats**: Supports clean, human-readable CLI tables, raw JSON for automated scripting, or markdown exports.
+- **� Network Passphrase Inspection**: Validate known Stellar networks, inspect custom passphrases, and identify whether a passphrase matches Mainnet, Testnet, or Futurenet.
+- **�💾 Multiple Output Formats**: Supports clean, human-readable CLI tables, raw JSON for automated scripting, or markdown exports.
 
 ## Installation
 
@@ -48,6 +49,17 @@ npm run dev
 ```
 
 The interactive menu can collect inputs for Horizon inspection, Soroban inspection, account audit, health dashboard, transaction XDR decoding, operations history, and contract inspection. Before execution it prints a command summary and asks for confirmation.
+
+### Network Passphrase Inspection
+Inspect Stellar network passphrases and determine whether a supplied value matches a built-in network or represents a custom configuration:
+
+```bash
+npm run dev -- network
+npm run dev -- network --passphrase testnet
+npm run dev -- network --passphrase "Custom Network ; Local" --json
+```
+
+The command lists the built-in networks (Public Network, Testnet, and Futurenet) and reports whether the supplied value is known or custom. Empty input is rejected with a clear error.
 
 ### Horizon Endpoint Check
 Verify that a Horizon endpoint is reachable, measure response latency, and display network metadata (passphrase, protocol version, Horizon/Core versions):
