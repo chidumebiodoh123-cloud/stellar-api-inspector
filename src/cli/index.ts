@@ -997,7 +997,42 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 9. Transaction Submission Test
+// 9. Network Passphrase Inspection
+// ---------------------------------------------------------------------------
+program
+  .command('network')
+  .description('Inspect Stellar network passphrases and identify known networks')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-p, --passphrase <value>', 'Inspect a specific passphrase or network alias')
+  .action(async (options: { json?: boolean; output?: string; passphrase?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const result = inspectNetworkPassphrase(options.passphrase);
+
+    if (!result.ok) {
+      if (options.json) outputJsonError(result.error);
+      logger.error(result.error);
+      process.exit(1);
+    }
+
+    let text = `\n${chalk.bold.green('=== Stellar Network Passphrase Inspection ===')}\n\n`;
+    text += `${chalk.cyan('Input:')} ${result.input ? result.input : 'None (list built-in networks)'}\n`;
+    text += `${chalk.cyan('Status:')} ${result.known ? chalk.green('KNOWN') : chalk.yellow('CUSTOM')}\n`;
+    text += `${chalk.cyan('Network:')} ${result.networkName}\n`;
+    text += `${chalk.cyan('Passphrase:')} ${result.passphrase || 'None'}\n\n`;
+
+    text += `${chalk.bold('Built-in Networks')}\n`;
+    for (const network of result.availableNetworks) {
+      const marker = network.id === result.matchedNetwork?.id ? chalk.green('●') : '•';
+      text += `${marker} ${network.name}: ${network.passphrase}\n`;
+    }
+
+    writeResult(result, options, text);
+  });
+
+// ---------------------------------------------------------------------------
+// 10. Transaction Submission Test
 // ---------------------------------------------------------------------------
 program
   .command('tx-test')
