@@ -19,6 +19,7 @@ export type InteractiveAction =
   | 'operations'
   | 'contract'
   | 'soroban-tx'
+  | 'trades'
   | 'exit';
 
 export interface InteractiveCommand {
@@ -80,6 +81,7 @@ export async function collectInteractiveCommand(
         { name: 'Operations History', value: 'operations' },
         { name: 'Inspect Soroban Contract', value: 'contract' },
         { name: 'Inspect Soroban Transaction', value: 'soroban-tx' },
+        { name: 'Market Trade History', value: 'trades' },
         { name: 'Exit', value: 'exit' },
       ],
     },
@@ -108,6 +110,8 @@ export async function collectInteractiveCommand(
       return collectContractCommand(inquirer);
     case 'soroban-tx':
       return collectSorobanTxCommand(inquirer);
+    case 'trades':
+      return collectTradesCommand(inquirer);
     case 'exit':
       return null;
   }
@@ -401,5 +405,56 @@ async function collectSorobanTxCommand(inquirer: PromptModule): Promise<Interact
     command: 'soroban-tx',
     args: [answers.hash.trim(), '--rpc', answers.rpc],
     summary: `stellar-api-inspector soroban-tx ${answers.hash.trim()} --rpc ${answers.rpc}`,
+  };
+}
+
+async function collectTradesCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    baseAsset: string;
+    counterAsset: string;
+    horizon: string;
+    limit: string;
+  }>([
+    {
+      type: 'input',
+      name: 'baseAsset',
+      message: 'Base asset (e.g. XLM or CODE:ISSUER)',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'counterAsset',
+      message: 'Counter asset (e.g. USDC:ISSUER)',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'horizon',
+      message: 'Horizon endpoint URL',
+      default: 'https://horizon-testnet.stellar.org',
+      validate: validateUrl,
+    },
+    {
+      type: 'input',
+      name: 'limit',
+      message: 'Number of trades to fetch',
+      default: '20',
+      validate: validatePositiveInteger,
+    },
+  ]);
+
+  const args = [
+    answers.baseAsset,
+    answers.counterAsset,
+    '--horizon',
+    answers.horizon,
+    '--limit',
+    answers.limit,
+  ];
+
+  return {
+    command: 'trades',
+    args,
+    summary: `stellar-api-inspector trades ${answers.baseAsset} ${answers.counterAsset} --horizon ${answers.horizon} --limit ${answers.limit}`,
   };
 }

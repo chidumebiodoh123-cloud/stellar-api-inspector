@@ -12,6 +12,7 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 - **🔎 Soroban Transaction Inspection**: Inspect execution status, contract events, diagnostic events, resource usage, and fee breakdown for any submitted Soroban transaction.
 - **🧬 Soroban Contract Inspection**: Retrieve contract instance metadata, WASM code hash, ledger footprint, storage counts, and TTL expiration warnings.
 - **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustline authorization/limit risks.
+- **📈 Market Trade History**: Retrieve recent trades for any Stellar asset pair, display per-trade details, and compute summary statistics (volume, average/high/low price).
 - **📜 Operations History**: Fetch Horizon operations, filter by account/type/limit, and normalize common operation details.
 - **🧭 Interactive Mode**: Launch a guided menu when the CLI is run without arguments.
 - **⏱️ Rate Limit Tracker**: Read and analyze HTTP headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`) to help avoid rate limits in production.
@@ -269,6 +270,120 @@ npm run dev -- orderbook XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54
 ```
 
 Native XLM can be specified as `XLM`, `native`, or `XLM:native`. JSON output is available with `--json`.
+
+### Market Trade History
+
+Retrieve and summarize recent trades for a Stellar asset pair from Horizon:
+
+```bash
+npm run dev -- trades XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H
+```
+
+Native XLM can be specified as `XLM`, `native`, or `XLM:native`. Non-native assets use `CODE:ISSUER` format.
+
+Control how many trades are returned with `--limit` (default: 20, max: 200):
+
+```bash
+npm run dev -- trades XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H \
+  --limit 50
+```
+
+Point at a different Horizon endpoint with `--horizon`:
+
+```bash
+npm run dev -- trades XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H \
+  --horizon https://horizon.stellar.org \
+  --limit 100
+```
+
+The output shows a trade table followed by summary statistics:
+
+```text
+=== Market Trade History ===
+
+Pair:    XLM / USDC:GBBD47IF...
+Horizon: https://horizon-testnet.stellar.org
+Latency: 62ms
+
+┌──────────────────────┬──────────────────────┬───────────┬──────────────┬─────────────┬─────────────────┬───────────────────┐
+│ Trade ID             │ Timestamp            │ Base      │ Counter      │ Price       │ Base Amount     │ Counter Amount    │
+├──────────────────────┼──────────────────────┼───────────┼──────────────┼─────────────┼─────────────────┼───────────────────┤
+│ 2163...              │ 2026-07-28T10:01:00Z │ XLM       │ USDC:GBBD... │ 0.1100000   │ 500.0000000     │ 55.0000000        │
+│ 2162...              │ 2026-07-28T09:58:00Z │ XLM       │ USDC:GBBD... │ 0.1095000   │ 1200.0000000    │ 131.4000000       │
+└──────────────────────┴──────────────────────┴───────────┴──────────────┴─────────────┴─────────────────┴───────────────────┘
+
+--- Summary Statistics ---
+┌──────────────────────┬─────────────────┐
+│ Metric               │ Value           │
+├──────────────────────┼─────────────────┤
+│ Number of Trades     │ 2               │
+│ Total Base Volume    │ 1700.0000000    │
+│ Total Counter Volume │ 186.4000000     │
+│ Average Price        │ 0.1097500       │
+│ Highest Price        │ 0.1100000       │
+│ Lowest Price         │ 0.1095000       │
+└──────────────────────┴─────────────────┘
+```
+
+When no trades exist for the pair, the command exits cleanly with a `No recent trades found` message — no error or non-zero exit.
+
+**JSON output** — ideal for analytics pipelines and dashboards:
+
+```bash
+npm run dev -- trades XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H --json
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "horizonUrl": "https://horizon-testnet.stellar.org",
+    "baseLabel": "XLM",
+    "counterLabel": "USDC:GBBD47IF...",
+    "limit": 20,
+    "latencyMs": 62,
+    "trades": [
+      {
+        "id": "216334...",
+        "ledgerCloseTime": "2026-07-28T10:01:00Z",
+        "baseAsset": "XLM",
+        "counterAsset": "USDC:GBBD47IF...",
+        "baseAmount": "500.0000000",
+        "counterAmount": "55.0000000",
+        "price": 0.11
+      }
+    ],
+    "stats": {
+      "tradeCount": 1,
+      "totalBaseVolume": 500,
+      "totalCounterVolume": 55,
+      "averagePrice": 0.11,
+      "highestPrice": 0.11,
+      "lowestPrice": 0.11
+    }
+  }
+}
+```
+
+When the market has no recent trades the `trades` array is empty and all `stats` numeric fields are `null`:
+
+```json
+"stats": {
+  "tradeCount": 0,
+  "totalBaseVolume": 0,
+  "totalCounterVolume": 0,
+  "averagePrice": null,
+  "highestPrice": null,
+  "lowestPrice": null
+}
+```
+
+Save output to a file:
+
+```bash
+npm run dev -- trades XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H \
+  --json --output trades-report.json
+```
 ### Decode Transaction XDR
 Decode a base64 TransactionEnvelope offline without network access:
 

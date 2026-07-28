@@ -22,6 +22,7 @@ import { inspectSorobanContract } from '../services/soroban-contract';
 import { fetchOperations } from '../services/operations';
 import { inspectNetworkPassphrase } from '../services/network-validator';
 import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
+import { fetchTrades } from '../services/trades';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
@@ -1086,7 +1087,125 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 11. Soroban Transaction Inspector
+// 11. Market Trade History
+// ---------------------------------------------------------------------------
+program
+  .command('trades <baseAsset> <counterAsset>')
+  .description('Fetch and summarize recent trade history for a Stellar asset pair')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-l, --limit <count>', 'Maximum number of trades to return', '20')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      baseAsset: string,
+      counterAsset: string,
+      options: { horizon: string; limit: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const validation = validateHorizonUrl(options.horizon);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const baseParsed = parseAsset(baseAsset);
+      if (!baseParsed.asset) {
+        const msg = baseParsed.error!;
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const counterParsed = parseAsset(counterAsset);
+      if (!counterParsed.asset) {
+        const msg = counterParsed.error!;
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const limit = Number.parseInt(options.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        const msg = '--limit must be a positive integer';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching trades for ${baseAsset} / ${counterAsset}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const result = await fetchTrades({
+          horizonUrl: options.horizon,
+          baseAsset: baseParsed.asset,
+          counterAsset: counterParsed.asset,
+          limit,
+        });
+
+        spinner.succeed(`Fetched ${result.trades.length} trade(s).`);
+
+        // ── Human-readable output ───────────────────────────────────────────
+        let text = `\n${chalk.bold.green('=== Market Trade History ===')}\n\n`;
+        text += `${chalk.cyan('Pair:')}    ${result.baseLabel} / ${result.counterLabel}\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        text += `${chalk.cyan('Latency:')} ${result.latencyMs}ms\n\n`;
+
+        if (result.trades.length === 0) {
+          text += chalk.yellow('No recent trades found for this asset pair.\n');
+        } else {
+          // Trade rows
+          const tradeRows = [
+            ['Trade ID', 'Timestamp', 'Base Asset', 'Counter Asset', 'Price', 'Base Amount', 'Counter Amount'],
+          ];
+          for (const trade of result.trades) {
+            tradeRows.push([
+              trade.id.slice(0, 16) + '...',
+              trade.ledgerCloseTime,
+              trade.baseAsset,
+              trade.counterAsset,
+              trade.price.toFixed(7),
+              parseFloat(trade.baseAmount).toFixed(7),
+              parseFloat(trade.counterAmount).toFixed(7),
+            ]);
+          }
+          text += formatTable(tradeRows);
+
+          // Summary statistics
+          const s = result.stats;
+          text += `\n${chalk.bold.cyan('--- Summary Statistics ---')}\n`;
+          const statsRows = [
+            ['Metric', 'Value'],
+            ['Number of Trades', String(s.tradeCount)],
+            ['Total Base Volume', s.totalBaseVolume.toFixed(7)],
+            ['Total Counter Volume', s.totalCounterVolume.toFixed(7)],
+            ['Average Price', s.averagePrice !== null ? s.averagePrice.toFixed(7) : 'N/A'],
+            ['Highest Price', s.highestPrice !== null ? s.highestPrice.toFixed(7) : 'N/A'],
+            ['Lowest Price', s.lowestPrice !== null ? s.lowestPrice.toFixed(7) : 'N/A'],
+          ];
+          text += formatTable(statsRows);
+        }
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 12. Soroban Transaction Inspector
 // ---------------------------------------------------------------------------
 program
   .command('soroban-tx <hash>')
