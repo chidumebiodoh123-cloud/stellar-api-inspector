@@ -266,6 +266,65 @@ npm run dev -- decode <xdrBase64> --network testnet --json
 
 Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
 
+### Ledger Header Inspection
+Retrieve and summarize information about a specific Stellar ledger using Horizon (`GET /ledgers/{sequence}`):
+
+```bash
+npm run dev -- ledger 57000000
+```
+
+The command prints a human-readable table containing the ledger's metadata and consensus activity:
+
+- **Sequence & identifiers** — sequence number, ledger hash, previous ledger hash
+- **Activity** — transaction count, successful transaction count, operation count, close timestamp
+- **Protocol** — Stellar protocol version in effect at close time
+- **Network economics** — base fee, base reserve, network totals (`total_coins`, `fee_pool`, `max_tx_set_size`) when the Horizon version exposes them
+
+```bash
+# Target a custom Horizon endpoint
+npm run dev -- ledger 57000000 --horizon https://horizon.stellar.org
+
+# Surface Horizon-provided links to related transactions/operations
+npm run dev -- ledger 57000000 --show-links
+
+# JSON output for monitoring pipelines or shell scripting
+npm run dev -- ledger 57000000 --json
+npm run dev -- ledger 57000000 --json --output ledger-57000000.json
+```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "horizonUrl": "https://horizon-testnet.stellar.org",
+    "ledger": {
+      "id": "...",
+      "sequence": 57000000,
+      "hash": "...",
+      "prev_hash": "...",
+      "transaction_count": 12,
+      "successful_transaction_count": 12,
+      "operation_count": 38,
+      "closed_at": "2024-01-15T12:00:00Z",
+      "total_coins": "105000000.0000000",
+      "fee_pool": "100.5",
+      "base_fee": 100,
+      "base_reserve": "5000000",
+      "max_tx_set_size": 1000,
+      "protocol_version": 21,
+      "_links": { "self": { "href": "..." }, "transactions": { "href": "..." } }
+    }
+  }
+}
+```
+
+When the ledger is unknown to the Horizon node (commonly a future or
+not-yet-finalized sequence number), the CLI prints a clear error,
+emits an `ok: false` JSON envelope with code `1`, and exits without
+silently hanging. Input validation rejects non-numeric or non-positive
+sequences before any network call is made.
+
 ### Transaction Submission Test
 Measure Horizon transaction submission latency with a lightweight self-payment:
 

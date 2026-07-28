@@ -4,7 +4,12 @@ import { Command } from 'commander';
 import ora from 'ora';
 import fs from 'fs';
 import chalk from 'chalk';
-import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
+import {
+  fetchAsset,
+  fetchLedger,
+  inspectHorizon,
+  inspectHorizonFeeStats,
+} from '../inspectors/horizon';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
@@ -12,7 +17,14 @@ import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
-import { formatBytes, formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
+import {
+  formatBytes,
+  formatFeeStatsRows,
+  formatLedgerLinksRows,
+  formatLedgerRows,
+  formatTable,
+  formatXlm,
+} from '../utils/formatters';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
@@ -409,39 +421,80 @@ program
 // ---------------------------------------------------------------------------
 program
   .command('ledger <sequence>')
-  .description('Inspect a specific ledger header from Horizon')
+  .description('Inspect a specific Stellar ledger header, metadata, and activity summary')
   .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option(
+    '--show-links',
+    'Display Horizon-provided links to related transactions/operations for this ledger',
+  )
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
-  .action(async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
-    if (options.json) logger.setJsonMode(true);
+  .action(
+    async (
+      sequence: string,
+      options: { horizon: string; showLinks?: boolean; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
 
-    const ledgerSequence = Number.parseInt(sequence, 10);
-    if (!Number.isFinite(ledgerSequence) || ledgerSequence <= 0) {
-      const message = 'Ledger sequence must be a positive integer';
-      if (options.json) outputJsonError(message);
-      logger.error(message);
-      process.exit(1);
-    }
+      const ledgerSequence = Number.parseInt(sequence, 10);
+      if (!Number.isFinite(ledgerSequence) || ledgerSequence <= 0) {
+        const message = 'Ledger sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
 
-    const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
+      const spinner = makeSpinner(
+        `Fetching ledger ${ledgerSequence} from ${options.horizon}...`,
+        !!options.json,
+      ).start();
 
-    try {
-      const result = await fetchLedger(options.horizon, ledgerSequence);
+      let result;
+      try {
+        result = await fetchLedger(options.horizon, ledgerSequence);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (options.json) {
+          // outputJsonError writes the envelope AND terminates. Skip the
+          // trailing spinner/logger/process.exit so we don't produce
+          // duplicate stderr/stdout under both real and mocked execution.
+          outputJsonError(message);
+          return;
+        }
+        spinner.fail(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (!result) {
+        const message = `Ledger ${ledgerSequence} not found on Horizon endpoint ${options.horizon}.`;
+        if (options.json) {
+          outputJsonError(message);
+          return;
+        }
+        spinner.fail(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
       spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
 
       let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
+      text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+      text += `${chalk.cyan('Sequence:')} ${result.ledger.sequence}\n\n`;
       text += formatTable(formatLedgerRows(result.ledger));
 
+      // Surface Horizon-provided links to related resources when the user
+      // opts in via --show-links. The links come directly from the ledger
+      // payload's _links block (no extra network call required).
+      if (options.showLinks) {
+        text += `\n${chalk.bold.cyan('--- Related Resources ---')}\n`;
+        text += formatTable(formatLedgerLinksRows(result.ledger));
+      }
+
       writeResult(result, options, text);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      spinner.fail(message);
-      if (options.json) outputJsonError(message);
-      logger.error(message);
-      process.exit(1);
-    }
-  });
+    },
+  );
 
 // ---------------------------------------------------------------------------
 // 5. Network Fee Statistics
