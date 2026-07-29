@@ -11,6 +11,7 @@ import {
   inspectHorizonFeeStats,
 } from '../inspectors/horizon';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
+import { formatContractInspectionReport } from '../output/contract-report';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
@@ -25,6 +26,7 @@ import {
   formatTable,
   formatXlm,
 } from '../utils/formatters';
+import { formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
@@ -434,6 +436,7 @@ program
       sequence: string,
       options: { horizon: string; showLinks?: boolean; json?: boolean; output?: string },
     ) => {
+    async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
       if (options.json) logger.setJsonMode(true);
 
       const ledgerSequence = Number.parseInt(sequence, 10);
@@ -493,6 +496,23 @@ program
       }
 
       writeResult(result, options, text);
+      const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
+
+      try {
+        const result = await fetchLedger(options.horizon, ledgerSequence);
+        spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
+
+        let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
+        text += formatTable(formatLedgerRows(result.ledger));
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
     },
   );
 
@@ -631,71 +651,26 @@ program
       ).start();
 
       try {
-        const result = await inspectSorobanContract({
-          rpcUrl: options.rpc,
-          contractId,
-          ttlWarningLedgers,
-        });
+        // Fetch contract data + RPC network info concurrently so the total
+        // Fetch contract data + RPC network info concurrently so the total
+        // wait is bounded by the slowest JSON-RPC call, not their sum.
+        // inspectSoroban() is fault-tolerant and always RESOLVES (with
+        // status: 'offline' on failure), so a single contract-side rejection
+        // is correctly propagated to the try/catch above.
+        const [result, networkInfo] = await Promise.all([
+          inspectSorobanContract({
+            rpcUrl: options.rpc,
+            contractId,
+            ttlWarningLedgers,
+          }),
+          inspectSoroban(options.rpc),
+        ]);
 
         spinner.succeed('Contract inspection complete.');
 
-        let text = `\n${chalk.bold.green('=== Soroban Contract Inspection ===')}\n\n`;
-        text += formatTable([
-          ['Property', 'Value'],
-          ['Contract ID', result.contractId],
-          ['RPC URL', result.rpcUrl],
-          ['WASM Code Hash', result.wasmHash ?? 'Unknown'],
-          ['Contract Owner', result.owner ?? 'Unavailable'],
-          [
-            'Current Ledger',
-            result.currentLedger !== undefined ? String(result.currentLedger) : 'Unknown',
-          ],
-          ['Instance Found', result.instance.found ? chalk.green('YES') : chalk.red('NO')],
-          ['Code Entry Found', result.code.found ? chalk.green('YES') : chalk.yellow('NO')],
-          [
-            'WASM Size',
-            result.code.wasmSizeBytes !== undefined
-              ? formatBytes(result.code.wasmSizeBytes)
-              : 'Unknown',
-          ],
-        ]);
-
-        text += `\n${chalk.bold.cyan('--- TTL & Expiration ---')}\n`;
-        text += formatTable([
-          ['Metric', 'Value'],
-          [
-            'Current TTL / Live Until Ledger',
-            result.instance.currentTtl !== undefined
-              ? String(result.instance.currentTtl)
-              : 'Unknown',
-          ],
-          [
-            'Last Modified Ledger',
-            result.instance.lastModifiedLedger !== undefined
-              ? String(result.instance.lastModifiedLedger)
-              : 'Unknown',
-          ],
-          [
-            'Remaining Ledger Lifetime',
-            result.instance.remainingLedgers !== undefined
-              ? String(result.instance.remainingLedgers)
-              : 'Unknown',
-          ],
-          ['Warning Threshold', `${ttlWarningLedgers} ledgers`],
-        ]);
-
-        text += `\n${chalk.bold.cyan('--- Storage Footprint ---')}\n`;
-        text += formatTable([
-          ['Metric', 'Value'],
-          ['Queried Ledger Entries', String(result.storage.queriedEntryCount)],
-          ['Found Ledger Entries', String(result.storage.foundEntryCount)],
-          ['Instance Storage Entries', String(result.storage.instanceStorageEntryCount)],
-        ]);
-
-        for (const warning of result.warnings) {
-          text += chalk.yellow(`\n⚠ ${warning}`);
-        }
-        if (result.warnings.length > 0) text += '\n';
+        const text = formatContractInspectionReport(result, networkInfo, {
+          ttlWarningLedgers,
+        });
 
         writeResult(result, options, text);
       } catch (err: unknown) {
@@ -1050,7 +1025,42 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 9. Transaction Submission Test
+// 9. Network Passphrase Inspection
+// ---------------------------------------------------------------------------
+program
+  .command('network')
+  .description('Inspect Stellar network passphrases and identify known networks')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-p, --passphrase <value>', 'Inspect a specific passphrase or network alias')
+  .action(async (options: { json?: boolean; output?: string; passphrase?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const result = inspectNetworkPassphrase(options.passphrase);
+
+    if (!result.ok) {
+      if (options.json) outputJsonError(result.error);
+      logger.error(result.error);
+      process.exit(1);
+    }
+
+    let text = `\n${chalk.bold.green('=== Stellar Network Passphrase Inspection ===')}\n\n`;
+    text += `${chalk.cyan('Input:')} ${result.input ? result.input : 'None (list built-in networks)'}\n`;
+    text += `${chalk.cyan('Status:')} ${result.known ? chalk.green('KNOWN') : chalk.yellow('CUSTOM')}\n`;
+    text += `${chalk.cyan('Network:')} ${result.networkName}\n`;
+    text += `${chalk.cyan('Passphrase:')} ${result.passphrase || 'None'}\n\n`;
+
+    text += `${chalk.bold('Built-in Networks')}\n`;
+    for (const network of result.availableNetworks) {
+      const marker = network.id === result.matchedNetwork?.id ? chalk.green('●') : '•';
+      text += `${marker} ${network.name}: ${network.passphrase}\n`;
+    }
+
+    writeResult(result, options, text);
+  });
+
+// ---------------------------------------------------------------------------
+// 10. Transaction Submission Test
 // ---------------------------------------------------------------------------
 program
   .command('tx-test')

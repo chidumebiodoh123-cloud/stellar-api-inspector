@@ -15,7 +15,8 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 - **🧭 Interactive Mode**: Launch a guided menu when the CLI is run without arguments.
 - **⏱️ Rate Limit Tracker**: Read and analyze HTTP headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`) to help avoid rate limits in production.
 - **📋 Health Dashboard**: Benchmark latency, check synchronization, and compare performance across multiple endpoints concurrently.
-- **💾 Multiple Output Formats**: Supports clean, human-readable CLI tables, raw JSON for automated scripting, or markdown exports.
+- **� Network Passphrase Inspection**: Validate known Stellar networks, inspect custom passphrases, and identify whether a passphrase matches Mainnet, Testnet, or Futurenet.
+- **�💾 Multiple Output Formats**: Supports clean, human-readable CLI tables, raw JSON for automated scripting, or markdown exports.
 
 ## Installation
 
@@ -48,6 +49,17 @@ npm run dev
 ```
 
 The interactive menu can collect inputs for Horizon inspection, Soroban inspection, account audit, health dashboard, transaction XDR decoding, operations history, and contract inspection. Before execution it prints a command summary and asks for confirmation.
+
+### Network Passphrase Inspection
+Inspect Stellar network passphrases and determine whether a supplied value matches a built-in network or represents a custom configuration:
+
+```bash
+npm run dev -- network
+npm run dev -- network --passphrase testnet
+npm run dev -- network --passphrase "Custom Network ; Local" --json
+```
+
+The command lists the built-in networks (Public Network, Testnet, and Futurenet) and reports whether the supplied value is known or custom. Empty input is rejected with a clear error.
 
 ### Horizon Endpoint Check
 Verify that a Horizon endpoint is reachable, measure response latency, and display network metadata (passphrase, protocol version, Horizon/Core versions):
@@ -190,7 +202,7 @@ Inspect contract ledger entries exposed by Soroban RPC:
 npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org
 ```
 
-The command queries the contract instance ledger entry, extracts the WASM code hash, queries the referenced contract code entry, calculates remaining ledger lifetime when expiration metadata is available, and reports the storage footprint it inspected.
+The command concurrently queries the Soroban RPC endpoint for two things: the target contract's ledger entries (instance + WASM code) and the RPC node's network configuration (passphrase + protocol version). It extracts the WASM code hash, queries the referenced contract code entry, calculates remaining ledger lifetime when expiration metadata is available, and reports the storage footprint it inspected.
 
 Configure TTL warning sensitivity:
 
@@ -205,15 +217,27 @@ Example output:
 ```text
 === Soroban Contract Inspection ===
 
-Contract ID:      C...
-WASM Code Hash:   0202020202020202020202020202020202020202020202020202020202020202
-Current Ledger:   100
-Instance Found:   YES
-Code Entry Found: YES
+Contract ID:        C...
+RPC URL:           https://soroban-testnet.stellar.org
+Network Passphrase: Test SDF Network ; September 2015
+Protocol Version:   21
+WASM Code Hash:     0202020202020202020202020202020202020202020202020202020202020202
+Contract Owner:     C...
+Current Ledger:     100
+Instance Found:     YES
+Code Entry Found:   YES
+WASM Size:          4 Bytes
 
 --- TTL & Expiration ---
 Current TTL / Live Until Ledger: 105
-Remaining Ledger Lifetime:      5
+Last Modified Ledger:            10
+Remaining Ledger Lifetime:       5
+Warning Threshold:               10 ledgers
+
+--- Storage Footprint ---
+Queried Ledger Entries:     2
+Found Ledger Entries:       2
+Instance Storage Entries:   1
 
 ⚠ Contract TTL is below warning threshold (5 ledgers remaining; threshold 10).
 ```
@@ -223,6 +247,40 @@ JSON output is available:
 ```bash
 npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org --json
 ```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "contractId": "C...",
+    "rpcUrl": "https://soroban-testnet.stellar.org",
+    "currentLedger": 100,
+    "wasmHash": "0202...",
+    "owner": "C...",
+    "instance": {
+      "found": true,
+      "lastModifiedLedger": 10,
+      "liveUntilLedger": 105,
+      "currentTtl": 105,
+      "remainingLedgers": 5
+    },
+    "code": {
+      "found": true,
+      "wasmSizeBytes": 4
+    },
+    "storage": {
+      "footprint": ["...", "..."],
+      "queriedEntryCount": 2,
+      "foundEntryCount": 2,
+      "instanceStorageEntryCount": 1
+    },
+    "warnings": ["Contract TTL is below warning threshold (5 ledgers remaining; threshold 10)."]
+  }
+}
+```
+
+If the RPC node cannot be reached, malformed contract IDs are rejected up-front with a clear error, and unknown contracts return a graceful `instance.found = false` result with an explanatory warning rather than an exception.
 
 ### Operations History
 
