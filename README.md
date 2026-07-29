@@ -460,6 +460,100 @@ npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stella
 }
 ```
 
+### Multi-Endpoint Compatibility Comparison
+
+Compare configuration, compatibility, and health across multiple Stellar endpoints (both Horizon and Soroban RPC). The command automatically detects the endpoint type, gathers metadata, and highlights configuration differences.
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://rpc.example.com
+```
+
+Compare endpoints from different Stellar networks:
+
+```bash
+npm run dev -- compare-endpoints \
+  https://horizon.stellar.org \
+  https://horizon-testnet.stellar.org \
+  https://soroban-testnet.stellar.org
+```
+
+The comparison table shows the following for each endpoint:
+
+| Column | Description |
+|--------|-------------|
+| Endpoint URL | The normalized URL of the endpoint |
+| Type | Detected service type: `Horizon`, `Soroban RPC`, or `Unknown` |
+| Status | `ONLINE` or `OFFLINE` |
+| Latency | Round-trip response time in milliseconds |
+| Network Passphrase | The Stellar network passphrase (e.g. "Public Global Stellar Network ; September 2015") |
+| Protocol | Stellar protocol version number |
+| Latest Ledger | The most recent ledger sequence reported by the endpoint |
+| Health | Health status (HTTP status for Horizon, "healthy" for Soroban, or error message for offline) |
+
+Differences between endpoints are highlighted:
+
+- **Network mismatches** are shown in red — endpoints may be on different Stellar networks
+- **Protocol version mismatches** are highlighted in yellow
+- **Offline endpoints** are reported as warnings
+
+#### Configurable timeout
+
+Set a custom request timeout in milliseconds:
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --timeout 15000
+```
+
+#### JSON output
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json
+```
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "endpoints": [
+      {
+        "url": "https://horizon.stellar.org",
+        "type": "horizon",
+        "status": "online",
+        "latencyMs": 120,
+        "networkPassphrase": "Public Global Stellar Network ; September 2015",
+        "protocolVersion": 21,
+        "latestLedger": 50000000,
+        "healthStatus": "HTTP 200"
+      },
+      {
+        "url": "https://horizon-testnet.stellar.org",
+        "type": "horizon",
+        "status": "online",
+        "latencyMs": 85,
+        "networkPassphrase": "Test SDF Network ; September 2015",
+        "protocolVersion": 21,
+        "latestLedger": 45000000,
+        "healthStatus": "HTTP 200"
+      }
+    ],
+    "differences": {
+      "networkMismatch": true,
+      "protocolMismatch": false,
+      "hasOfflineEndpoints": false
+    },
+    "checkedAt": "2024-01-15T12:00:00.000Z"
+  }
+}
+```
+
+Save to file:
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json --output comparison.json
+```
+
 ### Options
 - `-j, --json`: Return raw JSON instead of formatted CLI tables (great for shell pipelines).
 - `-o, --output <path>`: Save inspection output directly to a file (JSON or Markdown).
