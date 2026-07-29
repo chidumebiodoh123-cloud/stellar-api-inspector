@@ -203,7 +203,7 @@ Inspect contract ledger entries exposed by Soroban RPC:
 npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org
 ```
 
-The command queries the contract instance ledger entry, extracts the WASM code hash, queries the referenced contract code entry, calculates remaining ledger lifetime when expiration metadata is available, and reports the storage footprint it inspected.
+The command concurrently queries the Soroban RPC endpoint for two things: the target contract's ledger entries (instance + WASM code) and the RPC node's network configuration (passphrase + protocol version). It extracts the WASM code hash, queries the referenced contract code entry, calculates remaining ledger lifetime when expiration metadata is available, and reports the storage footprint it inspected.
 
 Configure TTL warning sensitivity:
 
@@ -218,15 +218,27 @@ Example output:
 ```text
 === Soroban Contract Inspection ===
 
-Contract ID:      C...
-WASM Code Hash:   0202020202020202020202020202020202020202020202020202020202020202
-Current Ledger:   100
-Instance Found:   YES
-Code Entry Found: YES
+Contract ID:        C...
+RPC URL:           https://soroban-testnet.stellar.org
+Network Passphrase: Test SDF Network ; September 2015
+Protocol Version:   21
+WASM Code Hash:     0202020202020202020202020202020202020202020202020202020202020202
+Contract Owner:     C...
+Current Ledger:     100
+Instance Found:     YES
+Code Entry Found:   YES
+WASM Size:          4 Bytes
 
 --- TTL & Expiration ---
 Current TTL / Live Until Ledger: 105
-Remaining Ledger Lifetime:      5
+Last Modified Ledger:            10
+Remaining Ledger Lifetime:       5
+Warning Threshold:               10 ledgers
+
+--- Storage Footprint ---
+Queried Ledger Entries:     2
+Found Ledger Entries:       2
+Instance Storage Entries:   1
 
 ⚠ Contract TTL is below warning threshold (5 ledgers remaining; threshold 10).
 ```
@@ -236,6 +248,40 @@ JSON output is available:
 ```bash
 npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org --json
 ```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "contractId": "C...",
+    "rpcUrl": "https://soroban-testnet.stellar.org",
+    "currentLedger": 100,
+    "wasmHash": "0202...",
+    "owner": "C...",
+    "instance": {
+      "found": true,
+      "lastModifiedLedger": 10,
+      "liveUntilLedger": 105,
+      "currentTtl": 105,
+      "remainingLedgers": 5
+    },
+    "code": {
+      "found": true,
+      "wasmSizeBytes": 4
+    },
+    "storage": {
+      "footprint": ["...", "..."],
+      "queriedEntryCount": 2,
+      "foundEntryCount": 2,
+      "instanceStorageEntryCount": 1
+    },
+    "warnings": ["Contract TTL is below warning threshold (5 ledgers remaining; threshold 10)."]
+  }
+}
+```
+
+If the RPC node cannot be reached, malformed contract IDs are rejected up-front with a clear error, and unknown contracts return a graceful `instance.found = false` result with an explanatory warning rather than an exception.
 
 ### Operations History
 
@@ -278,6 +324,65 @@ npm run dev -- decode <xdrBase64> --network testnet --json
 ```
 
 Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
+
+### Ledger Header Inspection
+Retrieve and summarize information about a specific Stellar ledger using Horizon (`GET /ledgers/{sequence}`):
+
+```bash
+npm run dev -- ledger 57000000
+```
+
+The command prints a human-readable table containing the ledger's metadata and consensus activity:
+
+- **Sequence & identifiers** — sequence number, ledger hash, previous ledger hash
+- **Activity** — transaction count, successful transaction count, operation count, close timestamp
+- **Protocol** — Stellar protocol version in effect at close time
+- **Network economics** — base fee, base reserve, network totals (`total_coins`, `fee_pool`, `max_tx_set_size`) when the Horizon version exposes them
+
+```bash
+# Target a custom Horizon endpoint
+npm run dev -- ledger 57000000 --horizon https://horizon.stellar.org
+
+# Surface Horizon-provided links to related transactions/operations
+npm run dev -- ledger 57000000 --show-links
+
+# JSON output for monitoring pipelines or shell scripting
+npm run dev -- ledger 57000000 --json
+npm run dev -- ledger 57000000 --json --output ledger-57000000.json
+```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "horizonUrl": "https://horizon-testnet.stellar.org",
+    "ledger": {
+      "id": "...",
+      "sequence": 57000000,
+      "hash": "...",
+      "prev_hash": "...",
+      "transaction_count": 12,
+      "successful_transaction_count": 12,
+      "operation_count": 38,
+      "closed_at": "2024-01-15T12:00:00Z",
+      "total_coins": "105000000.0000000",
+      "fee_pool": "100.5",
+      "base_fee": 100,
+      "base_reserve": "5000000",
+      "max_tx_set_size": 1000,
+      "protocol_version": 21,
+      "_links": { "self": { "href": "..." }, "transactions": { "href": "..." } }
+    }
+  }
+}
+```
+
+When the ledger is unknown to the Horizon node (commonly a future or
+not-yet-finalized sequence number), the CLI prints a clear error,
+emits an `ok: false` JSON envelope with code `1`, and exits without
+silently hanging. Input validation rejects non-numeric or non-positive
+sequences before any network call is made.
 
 ### Transaction Submission Test
 Measure Horizon transaction submission latency with a lightweight self-payment:
@@ -399,6 +504,57 @@ npm run dev -- soroban-tx <transactionHash> --json
 ```
 
 JSON output structure:
+### Multi-Endpoint Compatibility Comparison
+
+Compare configuration, compatibility, and health across multiple Stellar endpoints (both Horizon and Soroban RPC). The command automatically detects the endpoint type, gathers metadata, and highlights configuration differences.
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://rpc.example.com
+```
+
+Compare endpoints from different Stellar networks:
+
+```bash
+npm run dev -- compare-endpoints \
+  https://horizon.stellar.org \
+  https://horizon-testnet.stellar.org \
+  https://soroban-testnet.stellar.org
+```
+
+The comparison table shows the following for each endpoint:
+
+| Column | Description |
+|--------|-------------|
+| Endpoint URL | The normalized URL of the endpoint |
+| Type | Detected service type: `Horizon`, `Soroban RPC`, or `Unknown` |
+| Status | `ONLINE` or `OFFLINE` |
+| Latency | Round-trip response time in milliseconds |
+| Network Passphrase | The Stellar network passphrase (e.g. "Public Global Stellar Network ; September 2015") |
+| Protocol | Stellar protocol version number |
+| Latest Ledger | The most recent ledger sequence reported by the endpoint |
+| Health | Health status (HTTP status for Horizon, "healthy" for Soroban, or error message for offline) |
+
+Differences between endpoints are highlighted:
+
+- **Network mismatches** are shown in red — endpoints may be on different Stellar networks
+- **Protocol version mismatches** are highlighted in yellow
+- **Offline endpoints** are reported as warnings
+
+#### Configurable timeout
+
+Set a custom request timeout in milliseconds:
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --timeout 15000
+```
+
+#### JSON output
+
+```bash
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json
+```
+
+**JSON output structure:**
 
 ```json
 {
@@ -435,6 +591,34 @@ JSON output structure:
       "refundableFee": 200
     },
     "contractFailed": false
+    "endpoints": [
+      {
+        "url": "https://horizon.stellar.org",
+        "type": "horizon",
+        "status": "online",
+        "latencyMs": 120,
+        "networkPassphrase": "Public Global Stellar Network ; September 2015",
+        "protocolVersion": 21,
+        "latestLedger": 50000000,
+        "healthStatus": "HTTP 200"
+      },
+      {
+        "url": "https://horizon-testnet.stellar.org",
+        "type": "horizon",
+        "status": "online",
+        "latencyMs": 85,
+        "networkPassphrase": "Test SDF Network ; September 2015",
+        "protocolVersion": 21,
+        "latestLedger": 45000000,
+        "healthStatus": "HTTP 200"
+      }
+    ],
+    "differences": {
+      "networkMismatch": true,
+      "protocolMismatch": false,
+      "hasOfflineEndpoints": false
+    },
+    "checkedAt": "2024-01-15T12:00:00.000Z"
   }
 }
 ```
@@ -443,6 +627,7 @@ Save to file:
 
 ```bash
 npm run dev -- soroban-tx <transactionHash> --json --output tx-report.json
+npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json --output comparison.json
 ```
 
 ### Options
