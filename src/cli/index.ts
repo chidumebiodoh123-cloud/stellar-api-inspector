@@ -20,6 +20,7 @@ import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
 import { fetchOperations } from '../services/operations';
+import { compareEndpoints } from '../services/endpoint-inspector';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
@@ -849,7 +850,148 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 7. Order Book Inspector
+// 7. Multi-Endpoint Compatibility Comparison
+// ---------------------------------------------------------------------------
+program
+  .command('compare-endpoints <urls...>')
+  .description('Compare configuration, compatibility, and health across multiple Stellar endpoints')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-t, --timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .action(
+    async (
+      urls: string[],
+      options: { json?: boolean; output?: string; timeout?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (urls.length === 0) {
+        const message = 'At least one endpoint URL is required';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const timeout = Number.parseInt(options.timeout ?? '10000', 10);
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        const message = '--timeout must be a positive integer (milliseconds)';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Comparing ${urls.length} endpoint${urls.length === 1 ? '' : 's'}...`,
+        !!options.json,
+      ).start();
+
+      const result = await compareEndpoints(urls, { timeout });
+
+      const onlineCount = result.endpoints.filter((e) => e.status === 'online').length;
+
+      // Always show spinner status — even when some endpoints fail
+      if (onlineCount === result.endpoints.length) {
+        spinner.succeed('All endpoints responded successfully.');
+      } else if (onlineCount === 0) {
+        spinner.fail('All endpoints are offline or unreachable.');
+        if (options.json) outputJsonError('All endpoints are offline or unreachable.');
+        process.exit(1);
+      } else {
+        spinner.succeed(
+          `${onlineCount}/${result.endpoints.length} endpoints online, ` +
+            `${result.endpoints.length - onlineCount} offline.`,
+        );
+      }
+
+      // Build human-readable text
+      let text = `\n${chalk.bold.green('=== Multi-Endpoint Compatibility Comparison ===')}\n`;
+      text += `${chalk.gray(`Checked at: ${result.checkedAt}`)}\n`;
+      text += `${chalk.gray(`Timeout: ${timeout}ms`)}\n\n`;
+
+      // Comparison table
+      const headerRow = [
+        'Endpoint URL',
+        'Type',
+        'Status',
+        'Latency',
+        'Network Passphrase',
+        'Protocol',
+        'Latest Ledger',
+        'Health',
+      ];
+      const tableRows: string[][] = [headerRow];
+
+      for (const ep of result.endpoints) {
+        const typeStr =
+          ep.type === 'horizon'
+            ? chalk.blue('Horizon')
+            : ep.type === 'soroban-rpc'
+              ? chalk.magenta('Soroban RPC')
+              : chalk.gray('Unknown');
+
+        const statusStr =
+          ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+
+        const latencyStr = ep.status === 'online' ? `${ep.latencyMs}ms` : '-';
+
+        const networkStr =
+          ep.networkPassphrase ?? (ep.status === 'offline' ? chalk.gray('-') : 'Unknown');
+
+        const protocolStr =
+          ep.protocolVersion !== undefined
+            ? String(ep.protocolVersion)
+            : ep.status === 'offline'
+              ? chalk.gray('-')
+              : 'Unknown';
+
+        const ledgerStr =
+          ep.latestLedger !== undefined
+            ? String(ep.latestLedger)
+            : ep.status === 'offline'
+              ? chalk.gray('-')
+              : 'Unknown';
+
+        const healthStr = ep.status === 'online' ? chalk.green(ep.healthStatus ?? 'OK') : ep.error ?? '-';
+
+        tableRows.push([
+          ep.url,
+          typeStr,
+          statusStr,
+          latencyStr,
+          networkStr,
+          protocolStr,
+          ledgerStr,
+          healthStr,
+        ]);
+      }
+
+      text += formatTable(tableRows);
+
+      // Differences / warnings section
+      if (result.differences.networkMismatch) {
+        text += chalk.red(`\n⚠ NETWORK MISMATCH: Endpoints are on different Stellar networks!\n`);
+      }
+      if (result.differences.protocolMismatch) {
+        text += chalk.yellow(
+          `\n⚠ PROTOCOL VERSION MISMATCH: Endpoints are running different protocol versions.\n`,
+        );
+      }
+      if (result.differences.hasOfflineEndpoints) {
+        text += chalk.yellow(
+          `\n⚠ ${result.endpoints.filter((e) => e.status === 'offline').length} endpoint(s) are offline or unreachable.\n`,
+        );
+      }
+
+      if (!result.differences.networkMismatch && !result.differences.protocolMismatch && !result.differences.hasOfflineEndpoints) {
+        text += chalk.green(`\n✓ All endpoints are compatible — no configuration differences detected.\n`);
+      }
+
+      writeResult(result, options, text);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 8. Order Book Inspector
 // ---------------------------------------------------------------------------
 program
   .command('orderbook <baseAsset> <counterAsset>')
