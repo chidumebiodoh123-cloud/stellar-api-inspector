@@ -34,6 +34,8 @@ import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
 import { fetchOperations } from '../services/operations';
+import { inspectNetworkPassphrase } from '../services/network-validator';
+import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
 import { compareEndpoints } from '../services/endpoint-inspector';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
@@ -1252,6 +1254,178 @@ program
 
     writeResult(result, options, text);
   });
+
+// ---------------------------------------------------------------------------
+// 11. Soroban Transaction Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('soroban-tx <hash>')
+  .description('Inspect Soroban transaction execution details, events, and resource usage')
+  .option('-r, --rpc <url>', 'Soroban RPC endpoint', 'https://soroban-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      hash: string,
+      options: { rpc: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      // Validate hash format before touching the network
+      const hashValidation = validateTransactionHash(hash);
+      if (!hashValidation.valid) {
+        if (options.json) outputJsonError(hashValidation.error!);
+        logger.error(hashValidation.error!);
+        process.exit(1);
+      }
+
+      // Validate RPC URL
+      const rpcValidation = validateSorobanUrl(options.rpc);
+      if (!rpcValidation.valid) {
+        if (options.json) outputJsonError(rpcValidation.error!);
+        logger.error(rpcValidation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching Soroban transaction ${hash.slice(0, 12)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await inspectSorobanTransaction({ rpcUrl: options.rpc, hash });
+
+      // ── Offline / unknown error ──────────────────────────────────────────
+      if (result.status === 'UNKNOWN') {
+        spinner.fail(`Failed to reach Soroban RPC: ${result.error}`);
+        if (options.json) outputJsonError(result.error ?? 'Unknown error');
+        process.exit(1);
+      }
+
+      // ── Not found ────────────────────────────────────────────────────────
+      if (result.status === 'NOT_FOUND') {
+        spinner.fail(`Transaction not found: ${hash}`);
+        if (options.json) outputJsonError(result.error ?? 'Transaction not found');
+        process.exit(1);
+      }
+
+      // ── Pending ──────────────────────────────────────────────────────────
+      if (result.status === 'PENDING') {
+        spinner.succeed('Transaction is pending.');
+        const pendingText =
+          `\n${chalk.bold.yellow('=== Soroban Transaction (PENDING) ===')}\n\n` +
+          chalk.yellow('Transaction is still pending inclusion in a ledger.\n') +
+          `Hash: ${result.hash}\n`;
+        writeResult(result, options, pendingText);
+        return;
+      }
+
+      spinner.succeed('Soroban transaction inspection complete.');
+
+      // ── Human-readable output ─────────────────────────────────────────────
+      const statusColor =
+        result.status === 'SUCCESS'
+          ? chalk.green(result.status)
+          : chalk.red(result.status);
+
+      let text = `\n${chalk.bold.green('=== Soroban Transaction Inspection ===')}\n\n`;
+
+      const headerRows: string[][] = [
+        ['Property', 'Value'],
+        ['Transaction Hash', result.hash],
+        ['RPC URL', result.rpcUrl],
+        ['Execution Status', statusColor],
+        ['Response Latency', `${result.latencyMs}ms`],
+        ['Ledger Sequence', result.ledger !== undefined ? String(result.ledger) : 'Unknown'],
+        [
+          'Ledger Close Time',
+          result.ledgerCloseTimeIso ?? (result.ledgerCloseTime !== undefined
+            ? String(result.ledgerCloseTime)
+            : 'Unknown'),
+        ],
+        ['Return Value', result.returnValue ?? 'None'],
+      ];
+      text += formatTable(headerRows);
+
+      // ── Resource usage ────────────────────────────────────────────────────
+      if (result.resources) {
+        text += `\n${chalk.bold.cyan('--- Resource Usage ---')}\n`;
+        const resRows: string[][] = [['Resource', 'Value']];
+        const r = result.resources;
+        if (r.instructions !== undefined)
+          resRows.push(['Instructions', r.instructions.toLocaleString()]);
+        if (r.readBytes !== undefined)
+          resRows.push(['Read Bytes', formatBytes(r.readBytes)]);
+        if (r.writeBytes !== undefined)
+          resRows.push(['Write Bytes', formatBytes(r.writeBytes)]);
+        if (r.readLedgerEntries !== undefined)
+          resRows.push(['Read Ledger Entries', String(r.readLedgerEntries)]);
+        if (r.writeLedgerEntries !== undefined)
+          resRows.push(['Write Ledger Entries', String(r.writeLedgerEntries)]);
+        if (resRows.length > 1) text += formatTable(resRows);
+      }
+
+      // ── Fee information ───────────────────────────────────────────────────
+      if (result.fee) {
+        text += `\n${chalk.bold.cyan('--- Soroban Fee Information ---')}\n`;
+        const feeRows: string[][] = [['Fee Component', 'Amount (stroops)']];
+        const f = result.fee;
+        if (f.totalFee !== undefined)
+          feeRows.push(['Total Fee', String(f.totalFee)]);
+        if (f.inclusionFee !== undefined)
+          feeRows.push(['Inclusion Fee', String(f.inclusionFee)]);
+        if (f.resourceFeeCharged !== undefined)
+          feeRows.push(['Resource Fee Charged', String(f.resourceFeeCharged)]);
+        if (f.refundableFee !== undefined)
+          feeRows.push(['Refundable Fee', String(f.refundableFee)]);
+        if (feeRows.length > 1) text += formatTable(feeRows);
+      }
+
+      // ── Contract events ───────────────────────────────────────────────────
+      if (result.events.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Contract Events (${result.events.length}) ---`)}\n`;
+        for (const [i, ev] of result.events.entries()) {
+          text += `\n${chalk.yellow(`#${i + 1} [${ev.type}]`)}`;
+          if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
+          text += '\n';
+          const evRows: string[][] = [['Field', 'Value']];
+          if (ev.topics.length > 0)
+            evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined)
+            evRows.push(['Data', ev.data]);
+          if (evRows.length > 1) text += formatTable(evRows);
+        }
+      } else {
+        text += `\n${chalk.gray('No contract events emitted.')}\n`;
+      }
+
+      // ── Diagnostic events ─────────────────────────────────────────────────
+      if (result.diagnosticEvents.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Diagnostic Events (${result.diagnosticEvents.length}) ---`)}\n`;
+        for (const [i, ev] of result.diagnosticEvents.entries()) {
+          text += `\n${chalk.yellow(`#${i + 1} [${ev.type}]`)}`;
+          if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
+          text += '\n';
+          const evRows: string[][] = [['Field', 'Value']];
+          if (ev.topics.length > 0)
+            evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined)
+            evRows.push(['Data', ev.data]);
+          if (evRows.length > 1) text += formatTable(evRows);
+        }
+      }
+
+      // ── Failed contract execution warning ─────────────────────────────────
+      if (result.contractFailed) {
+        text += chalk.red(
+          '\n⚠ Contract invocation failed. Review the diagnostic events above for details.\n',
+        );
+      }
+
+      writeResult(result, options, text);
+    },
+  );
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {

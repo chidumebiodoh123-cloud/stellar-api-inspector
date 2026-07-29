@@ -9,6 +9,7 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 
 - **🌐 Horizon Inspection**: Connect to any Horizon endpoint and retrieve synchronization status, fee statistics, network protocol, and ledger ranges.
 - **⚡ Soroban RPC Health**: Retrieve health details, transaction submission state, latest ledger information, and network parameters.
+- **🔎 Soroban Transaction Inspection**: Inspect execution status, contract events, diagnostic events, resource usage, and fee breakdown for any submitted Soroban transaction.
 - **🧬 Soroban Contract Inspection**: Retrieve contract instance metadata, WASM code hash, ledger footprint, storage counts, and TTL expiration warnings.
 - **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustline authorization/limit risks.
 - **📜 Operations History**: Fetch Horizon operations, filter by account/type/limit, and normalize common operation details.
@@ -460,6 +461,49 @@ npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stella
 }
 ```
 
+### Soroban Transaction Inspection
+
+Inspect execution details of a Soroban transaction after submission — including execution status, ledger, return value, resource consumption, fee breakdown, contract events, and diagnostic events:
+
+```bash
+npm run dev -- soroban-tx <transactionHash>
+```
+
+Specify a custom RPC endpoint with `--rpc`:
+
+```bash
+npm run dev -- soroban-tx <transactionHash> \
+  --rpc https://soroban-testnet.stellar.org
+```
+
+The transaction hash must be a 64-character hexadecimal string. Invalid hashes are rejected before any network call is made.
+
+**Status values:**
+
+| Status | Meaning |
+|--------|---------|
+| `SUCCESS` | Contract invocation completed successfully |
+| `FAILED` | Transaction was included in a ledger but the contract execution failed |
+| `PENDING` | Transaction has been submitted but not yet included in a ledger |
+| `NOT_FOUND` | Transaction hash is unknown to the node (expired or never submitted) |
+
+**Handling failed executions:**
+
+When a contract invocation fails, `soroban-tx` still displays all available information — ledger sequence, resource usage, and any diagnostic events emitted before the failure — making it straightforward to diagnose what went wrong:
+
+```bash
+npm run dev -- soroban-tx <failedTxHash> --rpc https://soroban-testnet.stellar.org
+```
+
+A `⚠ Contract invocation failed` warning is shown at the bottom of the output, and the exit code is non-zero.
+
+**JSON output:**
+
+```bash
+npm run dev -- soroban-tx <transactionHash> --json
+```
+
+JSON output structure:
 ### Multi-Endpoint Compatibility Comparison
 
 Compare configuration, compatibility, and health across multiple Stellar endpoints (both Horizon and Soroban RPC). The command automatically detects the endpoint type, gathers metadata, and highlights configuration differences.
@@ -516,6 +560,37 @@ npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-tes
 {
   "ok": true,
   "data": {
+    "hash": "aabbcc...",
+    "rpcUrl": "https://soroban-testnet.stellar.org",
+    "latencyMs": 84,
+    "status": "SUCCESS",
+    "ledger": 5000000,
+    "ledgerCloseTime": 1700000000,
+    "ledgerCloseTimeIso": "2023-11-14T22:13:20.000Z",
+    "returnValue": "AAAAAQAAAA==",
+    "events": [
+      {
+        "type": "contract",
+        "contractId": "C...",
+        "topics": ["AAAAA=", "BBBBB="],
+        "data": "CCCCC="
+      }
+    ],
+    "diagnosticEvents": [],
+    "resources": {
+      "instructions": 1000000,
+      "readBytes": 512,
+      "writeBytes": 256,
+      "readLedgerEntries": 3,
+      "writeLedgerEntries": 1
+    },
+    "fee": {
+      "totalFee": 1500,
+      "inclusionFee": 100,
+      "resourceFeeCharged": 1400,
+      "refundableFee": 200
+    },
+    "contractFailed": false
     "endpoints": [
       {
         "url": "https://horizon.stellar.org",
@@ -551,6 +626,7 @@ npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-tes
 Save to file:
 
 ```bash
+npm run dev -- soroban-tx <transactionHash> --json --output tx-report.json
 npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json --output comparison.json
 ```
 

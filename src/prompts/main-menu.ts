@@ -18,6 +18,7 @@ export type InteractiveAction =
   | 'decode'
   | 'operations'
   | 'contract'
+  | 'soroban-tx'
   | 'exit';
 
 export interface InteractiveCommand {
@@ -78,6 +79,7 @@ export async function collectInteractiveCommand(
         { name: 'Decode Transaction XDR', value: 'decode' },
         { name: 'Operations History', value: 'operations' },
         { name: 'Inspect Soroban Contract', value: 'contract' },
+        { name: 'Inspect Soroban Transaction', value: 'soroban-tx' },
         { name: 'Exit', value: 'exit' },
       ],
     },
@@ -104,6 +106,8 @@ export async function collectInteractiveCommand(
       return collectOperationsCommand(inquirer);
     case 'contract':
       return collectContractCommand(inquirer);
+    case 'soroban-tx':
+      return collectSorobanTxCommand(inquirer);
     case 'exit':
       return null;
   }
@@ -372,5 +376,30 @@ async function collectFeesCommand(inquirer: PromptModule): Promise<InteractiveCo
     command: 'fees',
     args: ['--horizon', answers.horizon],
     summary: `stellar-api-inspector fees --horizon ${answers.horizon}`,
+  };
+}
+
+async function collectSorobanTxCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ hash: string; rpc: string }>([
+    {
+      type: 'input',
+      name: 'hash',
+      message: 'Transaction hash (64 hex characters)',
+      validate: (value: string) =>
+        /^[0-9a-fA-F]{64}$/.test(value.trim()) || 'Enter a valid 64-character hex transaction hash',
+    },
+    {
+      type: 'input',
+      name: 'rpc',
+      message: 'Soroban RPC URL',
+      default: 'https://soroban-testnet.stellar.org',
+      validate: validateSorobanRpcUrl,
+    },
+  ]);
+
+  return {
+    command: 'soroban-tx',
+    args: [answers.hash.trim(), '--rpc', answers.rpc],
+    summary: `stellar-api-inspector soroban-tx ${answers.hash.trim()} --rpc ${answers.rpc}`,
   };
 }
