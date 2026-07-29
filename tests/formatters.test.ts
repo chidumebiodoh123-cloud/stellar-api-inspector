@@ -27,8 +27,8 @@ describe('Formatter Utilities', () => {
     const tableString = formatTable(data);
     expect(tableString).toContain('Col1');
     expect(tableString).toContain('Val1');
-    expect(tableString).toContain('â”Œ');
-    expect(tableString).toContain('â””');
+    expect(tableString).toContain('┌');
+    expect(tableString).toContain('└');
   });
 
   it('formats ledger inspection rows consistently', () => {

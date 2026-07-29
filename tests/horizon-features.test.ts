@@ -59,5 +59,4 @@ describe('Horizon feature inspectors', () => {
     expect(result?.info.numAccounts).toBe(12);
     expect(result?.info.authorizationRequired).toBe(true);
   });
-
 });
